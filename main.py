@@ -10,6 +10,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+from vpn_api import vpn_manager
 
 # Импорт конфигурации (убедитесь, что config.py создан)
 from config import BOT_TOKEN, TON_WALLET, USDT_TRC20_WALLET, BTC_WALLET, ADMIN_ID
