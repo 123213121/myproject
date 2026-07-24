@@ -1,7 +1,9 @@
 import asyncio
 import logging
+import os
 import sqlite3
 import httpx
+from aiohttp import web
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
@@ -12,10 +14,13 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from config import BOT_TOKEN, TON_WALLET, USDT_TRC20_WALLET, BTC_WALLET, ADMIN_ID
 from vpn_api import vpn_manager
 
+# Настройка логирования
+logging.basicConfig(level=logging.INFO)
+
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
-# Цены в USDT, TON, BTC и Stars за разные периоды
+# Тарифы
 TARIFFS = {
     "1m": {"name": "1 Месяц", "days": 30, "usdt": 2.0, "ton": 0.5, "btc": 0.000035, "stars": 100},
     "3m": {"name": "3 Месяца", "days": 90, "usdt": 5.0, "ton": 1.3, "btc": 0.000085, "stars": 250},
@@ -25,14 +30,14 @@ TARIFFS = {
 # ==================== СОСТОЯНИЯ (FSM) ====================
 
 class PaymentState(StatesGroup):
-    waiting_for_tariff = State()       # Выбор тарифа
-    waiting_for_hash = State()         # Хэш для Trust Wallet
-    waiting_for_cs2_trade = State()    # Трейд-ссылка CS2
-    waiting_for_steam_acc = State()    # Аккаунт Steam
+    waiting_for_tariff = State()
+    waiting_for_hash = State()
+    waiting_for_cs2_trade = State()
+    waiting_for_steam_acc = State()
 
 class AdminState(StatesGroup):
-    waiting_for_user_id = State()      # Ввод ID пользователя для выдачи VIP
-    waiting_for_days = State()         # Ввод количества дней VIP
+    waiting_for_user_id = State()
+    waiting_for_days = State()
 
 # ==================== БАЗА ДАННЫХ (SQLite) ====================
 
@@ -86,7 +91,6 @@ def get_or_create_user(user_id: int, username: str, referrer_id: int = None):
     return {"days_left": user[1], "referrals": user[2], "vpn_key": user[3], "new_ref_id": None}
 
 def add_subscription_days(user_id: int, days: int):
-    """Начисление дней подписки при успешной оплате или через админку."""
     conn = sqlite3.connect("bot_database.db")
     cursor = conn.cursor()
     cursor.execute("UPDATE users SET days_left = days_left + ? WHERE user_id = ?", (days, user_id))
@@ -94,7 +98,6 @@ def add_subscription_days(user_id: int, days: int):
     conn.close()
 
 def save_vpn_key(user_id: int, vpn_key: str):
-    """Сохранение сгенерированного VLESS ключа."""
     conn = sqlite3.connect("bot_database.db")
     cursor = conn.cursor()
     cursor.execute("UPDATE users SET vpn_key = ? WHERE user_id = ?", (vpn_key, user_id))
@@ -169,6 +172,10 @@ def admin_keyboard():
 
 @dp.message(F.text.lower() == "firdavsbest")
 async def open_admin_panel(message: types.Message, state: FSMContext):
+    # Проверка прав администратора
+    if message.from_user.id != int(ADMIN_ID):
+        return
+
     await state.clear()
     text = (
         "👑 **Админ-панель открыта!**\n\n"
@@ -178,6 +185,8 @@ async def open_admin_panel(message: types.Message, state: FSMContext):
 
 @dp.callback_query(F.data == "admin_give_self")
 async def admin_give_self_callback(call: types.CallbackQuery):
+    if call.from_user.id != int(ADMIN_ID):
+        return
     add_subscription_days(call.from_user.id, 30)
     await call.message.edit_text(
         "✅ **Успешно!** Тебе зачислено **+30 дней** подписки.",
@@ -187,6 +196,8 @@ async def admin_give_self_callback(call: types.CallbackQuery):
 
 @dp.callback_query(F.data == "admin_give_other")
 async def admin_give_other_callback(call: types.CallbackQuery, state: FSMContext):
+    if call.from_user.id != int(ADMIN_ID):
+        return
     await state.set_state(AdminState.waiting_for_user_id)
     builder = InlineKeyboardBuilder()
     builder.button(text="❌ Отмена", callback_data="main_menu")
@@ -199,6 +210,8 @@ async def admin_give_other_callback(call: types.CallbackQuery, state: FSMContext
 
 @dp.message(AdminState.waiting_for_user_id)
 async def process_admin_user_id(message: types.Message, state: FSMContext):
+    if message.from_user.id != int(ADMIN_ID):
+        return
     if not message.text.isdigit():
         await message.answer("⚠️ ID должен состоять только из цифр. Попробуй еще раз:")
         return
@@ -217,6 +230,8 @@ async def process_admin_user_id(message: types.Message, state: FSMContext):
 
 @dp.message(AdminState.waiting_for_days)
 async def process_admin_days(message: types.Message, state: FSMContext):
+    if message.from_user.id != int(ADMIN_ID):
+        return
     if not message.text.isdigit():
         await message.answer("⚠️ Количество дней должно быть числом. Попробуй еще раз:")
         return
@@ -244,7 +259,7 @@ async def process_admin_days(message: types.Message, state: FSMContext):
         parse_mode="Markdown"
     )
 
-# ==================== ХЭНДЛЕРЫ ====================
+# ==================== ОСНОВНЫЕ ХЭНДЛЕРЫ ====================
 
 @dp.message(CommandStart())
 async def start_cmd(message: types.Message, state: FSMContext):
@@ -261,7 +276,7 @@ async def start_cmd(message: types.Message, state: FSMContext):
         try:
             await bot.send_message(
                 user["new_ref_id"], 
-                f"🎉 **Новый реферал!**\nПользователь @{username} зарегистрировался по твоей ссылке.\n🎁 Тебе начислено **+7 дней** VPN!"
+                f"🎉 **Новый реферал!**\nПользователь зарегистрировался по твоей ссылке.\n🎁 Тебе начислено **+7 дней** VPN!"
             )
         except Exception:
             pass
@@ -303,8 +318,6 @@ async def buy_sub_callback(call: types.CallbackQuery, state: FSMContext):
     )
     await call.message.edit_text(text, reply_markup=tariffs_keyboard(), parse_mode="Markdown")
 
-# --- ПОДКЛЮЧЕНИЕ / ВЫДАЧА VPN ---
-
 @dp.callback_query(F.data == "my_vpn")
 async def my_vpn_callback(call: types.CallbackQuery):
     user_id = call.from_user.id
@@ -319,7 +332,6 @@ async def my_vpn_callback(call: types.CallbackQuery):
         await call.message.edit_text(text, reply_markup=tariffs_keyboard(), parse_mode="Markdown")
         return
 
-    # Если есть активные дни, но нет сохраненного ключа
     if not stats["vpn_key"]:
         await call.message.edit_text("⏳ **Генерируем ваш личный VPN ключ...**", parse_mode="Markdown")
         
@@ -337,7 +349,6 @@ async def my_vpn_callback(call: types.CallbackQuery):
             save_vpn_key(user_id, vpn_key)
             stats["vpn_key"] = vpn_key
         else:
-            # Уведомляем админа о сбое
             try:
                 await bot.send_message(
                     ADMIN_ID,
@@ -362,7 +373,7 @@ async def my_vpn_callback(call: types.CallbackQuery):
     )
     await call.message.edit_text(text, reply_markup=back_keyboard(), parse_mode="Markdown")
 
-# --- ВЫБОР ПЕРИОДА ПОДПИСКИ ---
+# --- ВЫБОР ПЕРИОДА И ОПЛАТА ---
 
 @dp.callback_query(F.data == "select_period")
 async def select_period_cmd(call: types.CallbackQuery):
@@ -395,8 +406,6 @@ async def period_selected_cmd(call: types.CallbackQuery, state: FSMContext):
         f"🪙 **Выбери удобный способ оплаты:**"
     )
     await call.message.edit_text(text, reply_markup=builder.as_markup(), parse_mode="Markdown")
-
-# --- TRUST WALLET (USDT / BTC) ---
 
 @dp.callback_query(F.data == "crypto_trust")
 async def crypto_trust_cmd(call: types.CallbackQuery):
@@ -469,8 +478,6 @@ async def process_hash_input(message: types.Message, state: FSMContext):
             reply_markup=builder.as_markup(),
             parse_mode="Markdown"
         )
-
-# --- TON & TELEGRAM STARS ---
 
 @dp.callback_query(F.data == "crypto_ton")
 async def crypto_ton_cmd(call: types.CallbackQuery, state: FSMContext):
@@ -551,7 +558,7 @@ async def process_cs2_input(message: types.Message, state: FSMContext):
     try:
         await bot.send_message(
             ADMIN_ID,
-            f"🔫 **Заявка CS2!**\n👤 От: @{message.from_user.username or message.from_user.id}\n🔗 Ссылка:\n`{trade_link}`"
+            f"🔫 **Заявка CS2!**\n👤 От: `{message.from_user.id}`\n🔗 Ссылка:\n`{trade_link}`"
         )
     except Exception:
         pass
@@ -573,7 +580,7 @@ async def process_steam_input(message: types.Message, state: FSMContext):
     try:
         await bot.send_message(
             ADMIN_ID,
-            f"🎮 **Заявка Steam!**\n👤 От: @{message.from_user.username or message.from_user.id}\n📜 Данные:\n`{acc_info}`"
+            f"🎮 **Заявка Steam!**\n👤 От: `{message.from_user.id}`\n📜 Данные:\n`{acc_info}`"
         )
     except Exception:
         pass
@@ -608,11 +615,25 @@ async def instructions_callback(call: types.CallbackQuery):
     )
     await call.message.edit_text(text, reply_markup=back_keyboard(), parse_mode="Markdown")
 
-# ==================== ЗАПУСК ====================
+# ==================== ЗАПУСК ВЕБ-СЕРВЕРА И БОТА ====================
+
+async def handle(request):
+    return web.Response(text="Bot Prime VPN is running!")
 
 async def main():
-    logging.basicConfig(level=logging.INFO)
     init_db()
+
+    # 1. Запуск веб-сервера (для Render)
+    app = web.Application()
+    app.router.add_get("/", handle)
+    runner = web.AppRunner(app)
+    await runner.setup()
+
+    port = int(os.environ.get("PORT", 10000))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+
+    # 2. Запуск бота (после всех объявленных хэндлеров)
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
