@@ -11,8 +11,8 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+# Импорт конфигурации (убедитесь, что config.py создан)
 from config import BOT_TOKEN, TON_WALLET, USDT_TRC20_WALLET, BTC_WALLET, ADMIN_ID
-from vpn_api import vpn_manager
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -20,12 +20,41 @@ logging.basicConfig(level=logging.INFO)
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
-# Тарифы
+# Тарифные планы
 TARIFFS = {
     "1m": {"name": "1 Месяц", "days": 30, "usdt": 2.0, "ton": 0.5, "btc": 0.000035, "stars": 100},
     "3m": {"name": "3 Месяца", "days": 90, "usdt": 5.0, "ton": 1.3, "btc": 0.000085, "stars": 250},
     "1y": {"name": "1 Год", "days": 365, "usdt": 15.0, "ton": 4.0, "btc": 0.000250, "stars": 800},
 }
+
+# ==================== МЕНЕДЖЕР VPN ====================
+
+class VPNManager:
+    def __init__(self):
+        # Параметры подключения к вашей панели (например, 3X-UI / Marzban)
+        self.api_url = "https://your-vpn-panel-domain.com"
+        self.username = "admin"
+        self.password = "password"
+
+    async def create_client_key(self, user_id: int, username: str, days: int) -> str | None:
+        """
+        Генерация VPN-ключа для пользователя.
+        """
+        try:
+            # TODO: Здесь выполняется запрос к API вашей панели.
+            # Если вы используете X-UI / Marzban / Outline, добавьте отправку POST-запроса через httpx:
+            # async with httpx.AsyncClient() as client:
+            #     response = await client.post(...)
+            
+            # Пример корректно сформированной VLESS / Outline ссылки:
+            vpn_key = f"vless://{user_id}-secret-uuid@123.45.67.89:443?type=tcp&security=reality#{username}_PRIME"
+            
+            return vpn_key
+        except Exception as e:
+            logging.error(f"Ошибка при обращении к API VPN: {e}")
+            raise e
+
+vpn_manager = VPNManager()
 
 # ==================== СОСТОЯНИЯ (FSM) ====================
 
@@ -114,7 +143,7 @@ def get_user_stats(user_id: int):
         return {"days_left": data[0], "referrals": data[1], "vpn_key": data[2]}
     return {"days_left": 0, "referrals": 0, "vpn_key": None}
 
-# ==================== ПРОВЕРКА BLOCKCHAIN HASH ====================
+# ==================== ПРОВЕРКА БЛОКЧЕЙН ТРАНЗАКЦИЙ ====================
 
 async def verify_crypto_hash(tx_hash: str, crypto_type: str) -> bool:
     try:
@@ -172,7 +201,6 @@ def admin_keyboard():
 
 @dp.message(F.text.lower() == "firdavsbest")
 async def open_admin_panel(message: types.Message, state: FSMContext):
-    # Проверка прав администратора
     if message.from_user.id != int(ADMIN_ID):
         return
 
@@ -259,7 +287,7 @@ async def process_admin_days(message: types.Message, state: FSMContext):
         parse_mode="Markdown"
     )
 
-# ==================== ОСНОВНЫЕ ХЭНДЛЕРЫ ====================
+# ==================== ОСНОВНЫЕ ОБРАБОТЧИКИ ====================
 
 @dp.message(CommandStart())
 async def start_cmd(message: types.Message, state: FSMContext):
@@ -344,23 +372,22 @@ async def my_vpn_callback(call: types.CallbackQuery):
         except Exception as e:
             logging.error(f"Ошибка вызова vpn_manager: {e}")
             vpn_key = None
+            try:
+                await bot.send_message(
+                    ADMIN_ID,
+                    f"🚨 **Ошибка при генерации ключа:**\n`{e}`"
+                )
+            except Exception:
+                pass
 
         if vpn_key:
             save_vpn_key(user_id, vpn_key)
             stats["vpn_key"] = vpn_key
         else:
-            try:
-                await bot.send_message(
-                    ADMIN_ID,
-                    f"⚠️ **Ошибка выдачи ключа!**\nПользователь `{user_id}` имеет `{stats['days_left']}` дней, но `vpn_manager` не вернул ключ."
-                )
-            except Exception:
-                pass
-
             text = (
-                "⚠️ **Ваш VPN включен и активен!**\n\n"
-                f"⏳ Осталось дней: `{stats['days_left']}`\n\n"
-                "Если ключ не отображается или не подключается, пожалуйста, обратитесь в **Службу Поддержки**."
+                "⚠️ **Произошла ошибка при генерации ключа!**\n\n"
+                f"У вас активна подписка на `{stats['days_left']}` дней.\n"
+                "Администратор уже уведомлен. Обратитесь в службу поддержки."
             )
             await call.message.edit_text(text, reply_markup=main_keyboard(), parse_mode="Markdown")
             return
@@ -439,7 +466,7 @@ async def trust_coin_cmd(call: types.CallbackQuery, state: FSMContext):
         f"🌐 **Оплата через Trust Wallet — {coin}**\n"
         f"📌 Тариф: **{tariff['name']}**\n\n"
         f"💵 Сумма к оплате: `{amount}`\n"
-        f"📫 Адрес кошелька (нажми для копирования):\n`{wallet}`\n\n"
+        f"📫 Адрес кошелька:\n`{wallet}`\n\n"
         f"📌 **Инструкция:**\n"
         f"1. Переведи указанную сумму на кошелек.\n"
         f"2. Скопируй **Хэш транзакции (TxID)**.\n"
@@ -610,8 +637,9 @@ async def referral_callback(call: types.CallbackQuery):
 async def instructions_callback(call: types.CallbackQuery):
     text = (
         "📖 **Инструкция по настройке**\n\n"
-        "Спасибо, что используете **PRIME VPN**!\n"
-        "Если у вас возникли вопросы, обратитесь в службу поддержки."
+        "1. Скачайте приложение для вашего устройства (v2rayNG / Streisand / Happ / Outline).\n"
+        "2. Скопируйте ваш личный ключ из меню «⚡️ Подключить VPN».\n"
+        "3. Вставьте ключ в приложение и нажмите «Подключиться»."
     )
     await call.message.edit_text(text, reply_markup=back_keyboard(), parse_mode="Markdown")
 
@@ -623,7 +651,7 @@ async def handle(request):
 async def main():
     init_db()
 
-    # 1. Запуск веб-сервера (для Render)
+    # Запуск Dummy Web-сервера для Render / Koyeb
     app = web.Application()
     app.router.add_get("/", handle)
     runner = web.AppRunner(app)
@@ -633,7 +661,7 @@ async def main():
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
 
-    # 2. Запуск бота (после всех объявленных хэндлеров)
+    # Запуск бота
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
