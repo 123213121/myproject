@@ -10,7 +10,6 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from vpn_api import vpn_manager
 
 # Импорт конфигурации (убедитесь, что config.py создан)
 from config import BOT_TOKEN, TON_WALLET, USDT_TRC20_WALLET, BTC_WALLET, ADMIN_ID
@@ -42,14 +41,9 @@ class VPNManager:
         Генерация VPN-ключа для пользователя.
         """
         try:
-            # TODO: Здесь выполняется запрос к API вашей панели.
-            # Если вы используете X-UI / Marzban / Outline, добавьте отправку POST-запроса через httpx:
-            # async with httpx.AsyncClient() as client:
-            #     response = await client.post(...)
-            
-            # Пример корректно сформированной VLESS / Outline ссылки:
+            # ТУТ ДОЛЖЕН БЫТЬ ЗАПРОС К API ВАШЕЙ ПАНЕЛИ ЧЕРЕЗ HTTPX
+            # Пример корректно сформированной VLESS ссылки:
             vpn_key = f"vless://{user_id}-secret-uuid@123.45.67.89:443?type=tcp&security=reality#{username}_PRIME"
-            
             return vpn_key
         except Exception as e:
             logging.error(f"Ошибка при обращении к API VPN: {e}")
@@ -179,6 +173,22 @@ def main_keyboard():
 def back_keyboard():
     builder = InlineKeyboardBuilder()
     builder.button(text="⬅️ Назад в меню", callback_data="main_menu")
+    return builder.as_markup()
+
+def devices_keyboard():
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🍏 Apple (iOS)", callback_data="setup_apple")
+    builder.button(text="🤖 Android", callback_data="setup_android")
+    builder.button(text="💻 Windows", callback_data="setup_windows")
+    builder.button(text="⬅️ В главное меню", callback_data="main_menu")
+    builder.adjust(1, 1, 1, 1)
+    return builder.as_markup()
+
+def back_to_devices_keyboard():
+    builder = InlineKeyboardBuilder()
+    builder.button(text="⬅️ Выбрать другое устройство", callback_data="my_vpn")
+    builder.button(text="🏠 В главное меню", callback_data="main_menu")
+    builder.adjust(1)
     return builder.as_markup()
 
 def tariffs_keyboard():
@@ -335,17 +345,7 @@ async def main_menu_callback(call: types.CallbackQuery, state: FSMContext):
     )
     await call.message.edit_text(text, reply_markup=main_keyboard(), parse_mode="Markdown")
 
-@dp.callback_query(F.data == "buy_sub")
-async def buy_sub_callback(call: types.CallbackQuery, state: FSMContext):
-    await state.clear()
-    text = (
-        "💳 **Выбери удобный способ оплаты:**\n\n"
-        "🚀 **1 Месяц** — 2 USDT / 0.5 TON / 100 Stars\n"
-        "🔥 **3 Месяца** — 5 USDT / 1.3 TON / 250 Stars *(Скидка 10%)*\n"
-        "👑 **1 Год** — 15 USDT / 4 TON / 800 Stars *(Скидка 33%)*\n\n"
-        "Принимаем **Криптовалюту**, **Telegram Stars**, **Скины CS2** и **Аккаунты Steam**!"
-    )
-    await call.message.edit_text(text, reply_markup=tariffs_keyboard(), parse_mode="Markdown")
+# --- ПОДКЛЮЧЕНИЕ VPN И ВЫБОР УСТРОЙСТВА ---
 
 @dp.callback_query(F.data == "my_vpn")
 async def my_vpn_callback(call: types.CallbackQuery):
@@ -361,9 +361,9 @@ async def my_vpn_callback(call: types.CallbackQuery):
         await call.message.edit_text(text, reply_markup=tariffs_keyboard(), parse_mode="Markdown")
         return
 
+    # Если ключа ещё нет в БД, генерируем его
     if not stats["vpn_key"]:
         await call.message.edit_text("⏳ **Генерируем ваш личный VPN ключ...**", parse_mode="Markdown")
-        
         try:
             vpn_key = await vpn_manager.create_client_key(
                 user_id=user_id,
@@ -373,13 +373,6 @@ async def my_vpn_callback(call: types.CallbackQuery):
         except Exception as e:
             logging.error(f"Ошибка вызова vpn_manager: {e}")
             vpn_key = None
-            try:
-                await bot.send_message(
-                    ADMIN_ID,
-                    f"🚨 **Ошибка при генерации ключа:**\n`{e}`"
-                )
-            except Exception:
-                pass
 
         if vpn_key:
             save_vpn_key(user_id, vpn_key)
@@ -394,14 +387,69 @@ async def my_vpn_callback(call: types.CallbackQuery):
             return
 
     text = (
-        f"⚡️ **Твой VPN доступ**\n\n"
-        f"🔑 **Ключ (нажми, чтобы скопировать):**\n"
-        f"`{stats['vpn_key']}`\n\n"
-        f"⏳ Осталось дней: `{stats['days_left']}`"
+        "📱 **Выберите ваше устройство для подключения:**\n\n"
+        "Мы подготовили пошаговую инструкцию и ссылки на приложения для каждого устройства."
     )
-    await call.message.edit_text(text, reply_markup=back_keyboard(), parse_mode="Markdown")
+    await call.message.edit_text(text, reply_markup=devices_keyboard(), parse_mode="Markdown")
+
+@dp.callback_query(F.data == "setup_apple")
+async def setup_apple_cmd(call: types.CallbackQuery):
+    stats = get_user_stats(call.from_user.id)
+    text = (
+        "🍏 **Инструкция для Apple (iPhone / iPad):**\n\n"
+        "1. Скачайте приложение **Streisand** из App Store:\n"
+        "🔗 [Скачать Streisand в App Store](https://apps.apple.com/app/streisand/id6450534064)\n\n"
+        "2. Нажмите на значок **«+»** в правом верхнем углу приложения.\n"
+        "3. Выберите **«Import from Clipboard»** (Импорт из буфера обмена).\n"
+        "4. Включите тумблер для подключения!\n\n"
+        "🔑 **Ваш личный VPN-ключ (нажмите, чтобы скопировать):**\n"
+        f"`{stats['vpn_key']}`"
+    )
+    await call.message.edit_text(text, reply_markup=back_to_devices_keyboard(), parse_mode="Markdown", disable_web_page_preview=True)
+
+@dp.callback_query(F.data == "setup_android")
+async def setup_android_cmd(call: types.CallbackQuery):
+    stats = get_user_stats(call.from_user.id)
+    text = (
+        "🤖 **Инструкция для Android:**\n\n"
+        "1. Скачайте приложение **v2rayNG** из Google Play:\n"
+        "🔗 [Скачать v2rayNG в Google Play](https://play.google.com/store/apps/details?id=com.v2ray.ang)\n\n"
+        "2. Нажмите на значок **«+»** в правом верхнем углу.\n"
+        "3. Выберите **«Импорт из буфера обмена»** (Import config from clipboard).\n"
+        "4. Нажмите на появившийся профиль и нажмите круглую кнопку внизу для подключения.\n\n"
+        "🔑 **Ваш личный VPN-ключ (нажмите, чтобы скопировать):**\n"
+        f"`{stats['vpn_key']}`"
+    )
+    await call.message.edit_text(text, reply_markup=back_to_devices_keyboard(), parse_mode="Markdown", disable_web_page_preview=True)
+
+@dp.callback_query(F.data == "setup_windows")
+async def setup_windows_cmd(call: types.CallbackQuery):
+    stats = get_user_stats(call.from_user.id)
+    text = (
+        "💻 **Инструкция для Windows:**\n\n"
+        "1. Скачайте приложение **v2rayN** с GitHub:\n"
+        "🔗 [Скачать v2rayN с GitHub](https://github.com/2dust/v2rayN/releases)\n\n"
+        "2. Скопируйте ваш ключ ниже и скопируйте его.\n"
+        "3. В окне программы нажмите **Ctrl + V** для добавления ключа.\n"
+        "4. Внизу экрана включите режим **«Системный прокси»** (System Proxy).\n\n"
+        "🔑 **Ваш личный VPN-ключ (нажмите, чтобы скопировать):**\n"
+        f"`{stats['vpn_key']}`"
+    )
+    await call.message.edit_text(text, reply_markup=back_to_devices_keyboard(), parse_mode="Markdown", disable_web_page_preview=True)
 
 # --- ВЫБОР ПЕРИОДА И ОПЛАТА ---
+
+@dp.callback_query(F.data == "buy_sub")
+async def buy_sub_callback(call: types.CallbackQuery, state: FSMContext):
+    await state.clear()
+    text = (
+        "💳 **Выбери удобный способ оплаты:**\n\n"
+        "🚀 **1 Месяц** — 2 USDT / 0.5 TON / 100 Stars\n"
+        "🔥 **3 Месяца** — 5 USDT / 1.3 TON / 250 Stars *(Скидка 10%)*\n"
+        "👑 **1 Год** — 15 USDT / 4 TON / 800 Stars *(Скидка 33%)*\n\n"
+        "Принимаем **Криптовалюту**, **Telegram Stars**, **Скины CS2** и **Аккаунты Steam**!"
+    )
+    await call.message.edit_text(text, reply_markup=tariffs_keyboard(), parse_mode="Markdown")
 
 @dp.callback_query(F.data == "select_period")
 async def select_period_cmd(call: types.CallbackQuery):
@@ -637,10 +685,11 @@ async def referral_callback(call: types.CallbackQuery):
 @dp.callback_query(F.data == "instructions")
 async def instructions_callback(call: types.CallbackQuery):
     text = (
-        "📖 **Инструкция по настройке**\n\n"
-        "1. Скачайте приложение для вашего устройства (v2rayNG / Streisand / Happ / Outline).\n"
-        "2. Скопируйте ваш личный ключ из меню «⚡️ Подключить VPN».\n"
-        "3. Вставьте ключ в приложение и нажмите «Подключиться»."
+        "📖 **Общая инструкция по настройке**\n\n"
+        "1. Перейдите в меню **«⚡️ Подключить VPN»**.\n"
+        "2. Выберите ваше устройство (Apple, Android, Windows).\n"
+        "3. Скачайте рекомендуемое приложение по ссылке.\n"
+        "4. Скопируйте ваш личный ключ и вставьте в приложение."
     )
     await call.message.edit_text(text, reply_markup=back_keyboard(), parse_mode="Markdown")
 
